@@ -14,6 +14,14 @@ async def translate(
     return await _mymemory(word, context, source_lang, target_lang)
 
 
+def _fix_encoding(text: str) -> str:
+    """MyMemory sometimes sends Latin-2 bytes mislabelled as UTF-8; try to repair."""
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 async def _mymemory(word: str, context: str, source_lang: str, target_lang: str) -> dict:
     lang_pair = f"{source_lang}|{target_lang}"
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -22,14 +30,16 @@ async def _mymemory(word: str, context: str, source_lang: str, target_lang: str)
             "https://api.mymemory.translated.net/get",
             params={"q": context, "langpair": lang_pair},
         )
-        context_translation = r1.json().get("responseData", {}).get("translatedText", "")
+        raw_context = r1.json().get("responseData", {}).get("translatedText", "")
+        context_translation = _fix_encoding(raw_context)
 
         # Translate the word alone for the flashcard
         r2 = await client.get(
             "https://api.mymemory.translated.net/get",
             params={"q": word, "langpair": lang_pair},
         )
-        word_translation = r2.json().get("responseData", {}).get("translatedText", word)
+        raw_word = r2.json().get("responseData", {}).get("translatedText", word)
+        word_translation = _fix_encoding(raw_word)
 
     return {
         "word": word,

@@ -18,10 +18,7 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   String? _selectedWord;
-  bool _loading = false;
-  Map<String, dynamic>? _translationData;
 
-  // Splits raw text into alternating word/non-word tokens
   List<String> _tokenize(String text) {
     final pattern = RegExp(r"[a-zA-Z'-]+|[^a-zA-Z'-]+");
     return pattern.allMatches(text).map((m) => m.group(0)!).toList();
@@ -29,84 +26,60 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   bool _isWord(String token) => RegExp(r"[a-zA-Z]").hasMatch(token);
 
-  Future<void> _onWordTap(String word, String context) async {
-    setState(() {
-      _selectedWord = word;
-      _loading = true;
-      _translationData = null;
-    });
+  void _onWordTap(String word) {
+    setState(() => _selectedWord = word);
 
-    _showBottomSheet();
+    // Start the future BEFORE opening the sheet so it runs immediately.
+    // FutureBuilder inside the sheet receives this future and handles loading/error/data.
+    final future = ApiService.translateWord(
+      word: word.toLowerCase(),
+      context: _sampleText,
+    );
 
-    try {
-      final data = await ApiService.translateWord(
-        word: word.toLowerCase(),
-        context: context,
-      );
-      setState(() {
-        _translationData = data;
-        _loading = false;
-      });
-    } catch (_) {
-      setState(() => _loading = false);
-    }
-  }
-
-  void _showBottomSheet() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          return AnimatedBuilder(
-            animation: const AlwaysStoppedAnimation(0),
-            builder: (_, __) => _TranslationSheet(
-              word: _selectedWord ?? '',
-              loading: _loading,
-              data: _translationData,
-              onSave: _saveWord,
-            ),
+      builder: (_) => _TranslationSheet(
+        word: word,
+        translationFuture: future,
+        onSave: (data) async {
+          await ApiService.saveWord(
+            word: data['word'],
+            translation: data['translation'],
+            context: _sampleText,
+            cefrLevel: data['cefr_level'] ?? '',
           );
+          if (context.mounted) {
+            Navigator.pop(context);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('"${data['word']}" saved to vocabulary')),
+            );
+          }
         },
       ),
     );
   }
 
-  Future<void> _saveWord() async {
-    if (_translationData == null) return;
-    await ApiService.saveWord(
-      word: _translationData!['word'],
-      translation: _translationData!['translation'],
-      context: _sampleText,
-      cefrLevel: _translationData!['cefr_level'] ?? '',
-    );
-    if (mounted) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('"${_translationData!['word']}" saved to vocabulary')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final tokens = _tokenize(_sampleText);
+
     final spans = tokens.map<InlineSpan>((token) {
       if (!_isWord(token)) return TextSpan(text: token);
+      final isSelected = token == _selectedWord;
       return TextSpan(
         text: token,
         style: TextStyle(
-          color: token == _selectedWord
-              ? Theme.of(context).colorScheme.primary
+          color: isSelected ? Theme.of(context).colorScheme.primary : null,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          backgroundColor: isSelected
+              ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.4)
               : null,
-          fontWeight:
-              token == _selectedWord ? FontWeight.bold : FontWeight.normal,
         ),
-        recognizer: TapGestureRecognizer()
-          ..onTap = () => _onWordTap(token, _sampleText),
+        recognizer: TapGestureRecognizer()..onTap = () => _onWordTap(token),
       );
     }).toList();
 
@@ -141,74 +114,104 @@ class _ReaderScreenState extends State<ReaderScreen> {
 class _TranslationSheet extends StatelessWidget {
   const _TranslationSheet({
     required this.word,
-    required this.loading,
-    required this.data,
+    required this.translationFuture,
     required this.onSave,
   });
 
   final String word;
-  final bool loading;
-  final Map<String, dynamic>? data;
-  final VoidCallback onSave;
+  final Future<Map<String, dynamic>> translationFuture;
+  final Future<void> Function(Map<String, dynamic>) onSave;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 24,
+        24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 32,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Handle
-          Center(
-            child: Container(
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Word + CEFR badge
-          Row(
+      child: FutureBuilder<Map<String, dynamic>>(
+        future: translationFuture,
+        builder: (context, snapshot) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                word,
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              // Drag handle
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-              const SizedBox(width: 10),
-              if (data != null)
-                _CefrBadge(level: data!['cefr_level'] ?? ''),
+              const SizedBox(height: 16),
+
+              // Word + CEFR badge
+              Row(
+                children: [
+                  Text(
+                    word,
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 10),
+                  if (snapshot.hasData)
+                    _CefrBadge(level: snapshot.data!['cefr_level'] ?? ''),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Loading / error / result
+              if (snapshot.connectionState == ConnectionState.waiting)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (snapshot.hasError)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Could not load translation.',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Make sure the backend is running:\nuvicorn main:app --reload',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                )
+              else if (snapshot.hasData) ...[
+                Text(
+                  snapshot.data!['translation'] ?? '',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.data!['context_translation'] ?? '',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.bookmark_add),
+                    label: const Text('Add to vocabulary'),
+                    onPressed: () => onSave(snapshot.data!),
+                  ),
+                ),
+              ],
             ],
-          ),
-          const SizedBox(height: 12),
-          if (loading)
-            const Center(child: CircularProgressIndicator())
-          else if (data != null) ...[
-            Text(
-              data!['translation'] ?? '',
-              style: const TextStyle(fontSize: 20, color: Colors.black87),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              data!['context_translation'] ?? '',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600], fontStyle: FontStyle.italic),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.bookmark_add),
-                label: const Text('Add to vocabulary'),
-                onPressed: onSave,
-              ),
-            ),
-          ] else
-            const Text('Could not load translation. Is the backend running?'),
-        ],
+          );
+        },
       ),
     );
   }
@@ -226,6 +229,7 @@ class _CefrBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (level.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(

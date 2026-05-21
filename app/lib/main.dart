@@ -17,7 +17,6 @@ class LinguaBookApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2D6A9F)),
         useMaterial3: true,
-        fontFamily: 'Georgia',
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
       initialRoute: '/',
